@@ -1279,11 +1279,14 @@ class Model(Base):
 
     def save(self, path: str):
         try:
-            onnx.checker.check_model(self.to_onnx_model(), full_check=True)
+            with open(path, "wb") as f:
+                f.write(self.to_onnx_model().SerializeToString())
+            onnx.checker.check_model(path, full_check=True)
         except:
             logger.exception("Model is not valid")
-        with open(path, "wb") as f:
-            f.write(self.to_onnx_model().SerializeToString())
+            if os.path.isfile(path):
+                os.remove(path)
+
 
     @classmethod
     def load(cls, path: str):
