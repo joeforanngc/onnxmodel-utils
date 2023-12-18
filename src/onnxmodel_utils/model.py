@@ -33,6 +33,7 @@ from onnxruntime.quantization import QuantType, quantize_dynamic
 from onnxruntime.tools.symbolic_shape_infer import SymbolicShapeInference
 from onnxsim import simplify
 from tqdm import tqdm
+from onnx.external_data_helper import convert_model_to_external_data
 
 AttributeType = AttributeProto.AttributeType
 
@@ -1277,10 +1278,24 @@ class Model(Base):
                     return graph
         return None
 
-    def save(self, path: str):
+    def save(self, path: str,
+             large_model: bool=False,
+             ext_tensor_filename: Optional[str] = None,
+             size_threshold=1024):
         try:
-            with open(path, "wb") as f:
-                f.write(self.to_onnx_model().SerializeToString())
+            # with open(path, "wb") as f:
+            #     f.write(self.to_onnx_model().SerializeToString())
+            # onnx.checker.check_model(path, full_check=True)
+            m = self.to_onnx_model()
+            if large_model:
+                assert ext_tensor_filename is not None
+                convert_model_to_external_data(m,
+                                               all_tensors_to_one_file=True,
+                                               location=ext_tensor_filename,
+                                               size_threshold=size_threshold,
+                                               convert_attribute=False
+                                               )
+            onnx.save_model(m, path)
             onnx.checker.check_model(path, full_check=True)
         except:
             logger.exception("Model is not valid")
