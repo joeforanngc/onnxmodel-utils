@@ -7,6 +7,7 @@ import sys
 import tempfile
 import time
 import weakref
+from pathlib import Path
 from typing import Any, Dict, List, Optional, TypeVar, Union
 from uuid import uuid4
 
@@ -378,7 +379,7 @@ class Tensor(Base):
         return value_info
 
     @classmethod
-    def from_onnx(cls, tensor: Union[TensorProto, ValueInfoProto]) -> "Tensor":
+    def from_onnx(cls, tensor: Union[TensorProto, ValueInfoProto], base_path: str="") -> "Tensor":
         dtype = None
         shape = None
         is_optional = False
@@ -391,7 +392,7 @@ class Tensor(Base):
                 dtype = DType(tensor.data_type)
             with contextlib.suppress(ValueError):
                 shape = tensor.dims
-            data = numpy_helper.to_array(tensor)
+            data = numpy_helper.to_array(tensor, base_dir=base_path)
             if shape is None:
                 shape = data.shape
             obj = cls(
@@ -758,19 +759,19 @@ class Graph(Base):
         )
 
     @classmethod
-    def from_onnx(cls, graph: GraphProto, is_subgraph: bool = False):
+    def from_onnx(cls, graph: GraphProto, is_subgraph: bool = False, base_path: str = ""):
         name_to_tensor = {}
         for i in graph.input:
-            name_to_tensor[i.name] = Tensor.from_onnx(i)
+            name_to_tensor[i.name] = Tensor.from_onnx(i, base_path=base_path)
         for o in graph.output:
-            name_to_tensor[o.name] = Tensor.from_onnx(o)
+            name_to_tensor[o.name] = Tensor.from_onnx(o, base_path=base_path)
         for i in graph.initializer:
-            name_to_tensor[i.name] = Tensor.from_onnx(i)
+            name_to_tensor[i.name] = Tensor.from_onnx(i, base_path=base_path)
         for v in graph.value_info:
             if v.name not in name_to_tensor:
-                name_to_tensor[v.name] = Tensor.from_onnx(v)
+                name_to_tensor[v.name] = Tensor.from_onnx(v, base_path=base_path)
             else:
-                name_to_tensor[v.name].update(Tensor.from_onnx(v))
+                name_to_tensor[v.name].update(Tensor.from_onnx(v, base_path=base_path))
 
         nodes = list()
         for node in graph.node:
@@ -1103,9 +1104,9 @@ class Model(Base):
         )
 
     @classmethod
-    def from_onnx(cls, model: ModelProto):
+    def from_onnx(cls, model: ModelProto, base_path: str = ""):
         obj = cls(
-            graph=Graph.from_onnx(model.graph),
+            graph=Graph.from_onnx(model.graph, base_path=base_path),
             ir_version=model.ir_version,
         )
         for opset in model.opset_import:
@@ -1308,7 +1309,7 @@ class Model(Base):
         model = ModelProto()
         with open(path, "rb") as f:
             model.ParseFromString(f.read())
-        return cls.from_onnx(model)
+        return cls.from_onnx(model, base_path = str(Path(path).parent))
 
     def add_prefix(self, prefix: str, include_shape=True):
         for g in self.graphs:
