@@ -1065,12 +1065,13 @@ class Model(Base):
         self.update_from_onnx(converted_model)
 
     def __copy__(self):
-        obj = Model(self.graph, self.ir_version, self.opset_imports)
+        obj = Model(self.graph, self.ir_version, self.opset_imports, self.use_ext_tensors)
         obj._verbose = self._verbose
         return obj
 
     def __deepcopy__(self, memo):
-        return Model.from_onnx(self.to_onnx_model())
+        return Model.from_onnx(self.to_onnx_model(),
+                               use_ext_tensors=self.use_ext_tensors)
 
     def get_schema(self, op_type: str):
         if op_type not in self.schemas:
@@ -1085,6 +1086,7 @@ class Model(Base):
                 self.graph == __o.graph,
                 self.ir_version == __o.ir_version,
                 all([o == i for o, i in zip(self.opset_imports, __o.opset_imports)]),
+                self.ext_tensors == __o.ext_tensors,
             ]
         )
 
@@ -1288,9 +1290,12 @@ class Model(Base):
         return None
 
     def save(self, path: str,
+             # TODO check if we need this parameter if we are using
+             # member variable
              use_ext_tensors: bool=False,
              ext_tensor_filename: Optional[str] = None):
         try:
+            use_ext_tensors = self.use_ext_tensors or use_ext_tensors
             m = self.to_onnx_model()
             save_onnx_model(
                 m,
@@ -1328,11 +1333,11 @@ class Model(Base):
             g.prune()
 
     @staticmethod
-    def _infer_shapes(model):
+    def _infer_shapes(model, use_ext_tensors):
         model = copy.deepcopy(model)
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "model.onnx")
-            save_onnx_model(model, path)
+            save_onnx_model(model, path, use_ext_tensors=use_ext_tensors)
             onnx.shape_inference.infer_shapes_path(path, data_prop=True)
             with contextlib.suppress(Exception):
                 onnx.shape_inference.infer_shapes_path(
@@ -1347,7 +1352,7 @@ class Model(Base):
 
     def infer_shapes(self):
         model = self.to_onnx_model()
-        model = self._infer_shapes(model)
+        model = self._infer_shapes(model, self.use_ext_tensors)
         self.update_from_onnx(model)
 
     def opt_by_rt(self, enable_extened=False, enable_all=False, disable_all=False):
@@ -2156,7 +2161,7 @@ class Model(Base):
         with tempfile.TemporaryDirectory() as tmpdir:
             model_path = os.path.join(tmpdir, "model.onnx")
             qmodel_path = os.path.join(tmpdir, "qmodel.onnx")
-            save_onnx_model(model, model_path, large_model=self.use_ext_tensors)
+            save_onnx_model(model, model_path, use_ext_tensors=self.use_ext_tensors)
 
             quantize_dynamic(
                 model_input=model_path,
@@ -2265,19 +2270,18 @@ class Model(Base):
 def save_onnx_model(
         model: Model,
         path: str,
-        use_ext_tensors: Optional[bool] = None,
+        use_ext_tensors: bool = False,
         ext_tensor_filename: Optional[str] = None,
 ):
-    if use_ext_tensors is None:
-        use_ext_tensors = model.use_ext_tensors
     if use_ext_tensors:
         if ext_tensor_filename is not None:
             ext_tensor_filepath = Path(path).parent / ext_tensor_filename
             if ext_tensor_filepath.is_file():
                 os.remove(ext_tensor_filepath)
         convert_model_to_external_data(
-            m,
+            model,
             all_tensors_to_one_file=True,
             location=ext_tensor_filename,
         )
-    onnx.save_model(m, path)
+    onnx.save_model(model, path)
+    return model

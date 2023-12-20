@@ -112,7 +112,8 @@ def build_if_model(
         tensor_list,
     )
     ir_version = max(then_model.ir_version, else_model.ir_version, 8)
-    model = Model(graph, ir_version)
+    use_ext_tensors = then_model.use_ext_tensors or else_model.use_ext_tensors
+    model = Model(graph, ir_version, use_ext_tensors=use_ext_tensors)
     for opset in then_model.opset_imports:
         model.add_opset(opset.domain, opset.version)
     for opset in else_model.opset_imports:
@@ -191,7 +192,8 @@ def build_if_model_with_cache(
         tensor_list,
     )
     ir_version = max(cache_model.ir_version, cacheless_model.ir_version, 8)
-    model = Model(graph, ir_version)
+    use_ext_tensors = cache_model.use_ext_tensors or cacheless_model.use_ext_tensors
+    model = Model(graph, ir_version, use_ext_tensors=use_ext_tensors)
     for opset in cache_model.opset_imports:
         model.add_opset(opset.domain, opset.version)
     for opset in cacheless_model.opset_imports:
