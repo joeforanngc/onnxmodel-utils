@@ -1025,12 +1025,14 @@ class Model(Base):
         graph: Graph,
         ir_version: Optional[int] = None,
         opset_imports: Optional[List[OperatorSetIdProto]] = None,
+        use_ext_tensors: bool = False
     ):
         self.graph = graph
         self.ir_version = ir_version
         self.opset_imports = opset_imports
         self._verbose = True
         self._test_shape = {}
+        self.use_ext_tensors = use_ext_tensors
 
     def add_opset(self, domain: str, version: int):
         if self.opset_imports is not None:
@@ -1104,10 +1106,16 @@ class Model(Base):
         )
 
     @classmethod
-    def from_onnx(cls, model: ModelProto, base_path: str = ""):
+    def from_onnx(
+            cls,
+            model: ModelProto,
+            base_path: str = "",
+            use_ext_tensors: bool = False
+    ):
         obj = cls(
             graph=Graph.from_onnx(model.graph, base_path=base_path),
             ir_version=model.ir_version,
+            use_ext_tensors=use_ext_tensors
         )
         for opset in model.opset_import:
             obj.add_opset(opset.domain, opset.version)
@@ -1280,23 +1288,15 @@ class Model(Base):
         return None
 
     def save(self, path: str,
-             large_model: bool=False,
-             ext_tensor_filename: Optional[str] = None,
-             size_threshold=1024):
+             use_ext_tensors: bool=False,
+             ext_tensor_filename: Optional[str] = None):
         try:
-            # with open(path, "wb") as f:
-            #     f.write(self.to_onnx_model().SerializeToString())
-            # onnx.checker.check_model(path, full_check=True)
             m = self.to_onnx_model()
-            if large_model:
-                assert ext_tensor_filename is not None
-                convert_model_to_external_data(m,
-                                               all_tensors_to_one_file=True,
-                                               location=ext_tensor_filename,
-                                               size_threshold=size_threshold,
-                                               convert_attribute=False
-                                               )
-            onnx.save_model(m, path)
+            save_onnx_model(
+                m,
+                path,
+                use_ext_tensors=use_ext_tensors,
+                ext_tensor_filename=ext_tensor_filename)
             onnx.checker.check_model(path, full_check=True)
         except:
             logger.exception("Model is not valid")
@@ -1305,11 +1305,15 @@ class Model(Base):
 
 
     @classmethod
-    def load(cls, path: str):
+    def load(cls, path: str, use_ext_tensors: bool=False):
         model = ModelProto()
         with open(path, "rb") as f:
             model.ParseFromString(f.read())
-        return cls.from_onnx(model, base_path = str(Path(path).parent))
+        return cls.from_onnx(
+            model,
+            base_path = str(Path(path).parent),
+            use_ext_tensors = use_ext_tensors,
+        )
 
     def add_prefix(self, prefix: str, include_shape=True):
         for g in self.graphs:
@@ -1328,7 +1332,7 @@ class Model(Base):
         model = copy.deepcopy(model)
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "model.onnx")
-            onnx.save(model, path)
+            save_onnx_model(model, path)
             onnx.shape_inference.infer_shapes_path(path, data_prop=True)
             with contextlib.suppress(Exception):
                 onnx.shape_inference.infer_shapes_path(
@@ -2152,7 +2156,7 @@ class Model(Base):
         with tempfile.TemporaryDirectory() as tmpdir:
             model_path = os.path.join(tmpdir, "model.onnx")
             qmodel_path = os.path.join(tmpdir, "qmodel.onnx")
-            onnx.save(model, model_path)
+            save_onnx_model(model, model_path, large_model=self.use_ext_tensors)
 
             quantize_dynamic(
                 model_input=model_path,
@@ -2256,3 +2260,24 @@ class Model(Base):
                     seen.add(t2)
         for t in shared_initializers:
             self.graph.add_tensor(t)
+
+
+def save_onnx_model(
+        model: Model,
+        path: str,
+        use_ext_tensors: Optional[bool] = None,
+        ext_tensor_filename: Optional[str] = None,
+):
+    if use_ext_tensors is None:
+        use_ext_tensors = model.use_ext_tensors
+    if use_ext_tensors:
+        if ext_tensor_filename is not None:
+            ext_tensor_filepath = Path(path).parent / ext_tensor_filename
+            if ext_tensor_filepath.is_file():
+                os.remove(ext_tensor_filepath)
+        convert_model_to_external_data(
+            m,
+            all_tensors_to_one_file=True,
+            location=ext_tensor_filename,
+        )
+    onnx.save_model(m, path)
