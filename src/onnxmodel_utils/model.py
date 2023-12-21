@@ -7,6 +7,7 @@ import sys
 import tempfile
 import time
 import weakref
+from pathlib import Path
 from typing import Any, Dict, List, Optional, TypeVar, Union
 from uuid import uuid4
 
@@ -29,6 +30,7 @@ from onnx import (
     numpy_helper,
     version_converter,
 )
+from onnx.external_data_helper import convert_model_to_external_data
 from onnxruntime.quantization import QuantType, quantize_dynamic
 from onnxruntime.tools.symbolic_shape_infer import SymbolicShapeInference
 from onnxsim import simplify
@@ -377,7 +379,9 @@ class Tensor(Base):
         return value_info
 
     @classmethod
-    def from_onnx(cls, tensor: Union[TensorProto, ValueInfoProto]) -> "Tensor":
+    def from_onnx(
+        cls, tensor: Union[TensorProto, ValueInfoProto], base_path: str = ""
+    ) -> "Tensor":
         dtype = None
         shape = None
         is_optional = False
@@ -390,7 +394,7 @@ class Tensor(Base):
                 dtype = DType(tensor.data_type)
             with contextlib.suppress(ValueError):
                 shape = tensor.dims
-            data = numpy_helper.to_array(tensor)
+            data = numpy_helper.to_array(tensor, base_dir=base_path)
             if shape is None:
                 shape = data.shape
             obj = cls(
@@ -757,19 +761,21 @@ class Graph(Base):
         )
 
     @classmethod
-    def from_onnx(cls, graph: GraphProto, is_subgraph: bool = False):
+    def from_onnx(
+        cls, graph: GraphProto, is_subgraph: bool = False, base_path: str = ""
+    ):
         name_to_tensor = {}
         for i in graph.input:
-            name_to_tensor[i.name] = Tensor.from_onnx(i)
+            name_to_tensor[i.name] = Tensor.from_onnx(i, base_path=base_path)
         for o in graph.output:
-            name_to_tensor[o.name] = Tensor.from_onnx(o)
+            name_to_tensor[o.name] = Tensor.from_onnx(o, base_path=base_path)
         for i in graph.initializer:
-            name_to_tensor[i.name] = Tensor.from_onnx(i)
+            name_to_tensor[i.name] = Tensor.from_onnx(i, base_path=base_path)
         for v in graph.value_info:
             if v.name not in name_to_tensor:
-                name_to_tensor[v.name] = Tensor.from_onnx(v)
+                name_to_tensor[v.name] = Tensor.from_onnx(v, base_path=base_path)
             else:
-                name_to_tensor[v.name].update(Tensor.from_onnx(v))
+                name_to_tensor[v.name].update(Tensor.from_onnx(v, base_path=base_path))
 
         nodes = list()
         for node in graph.node:
@@ -1023,12 +1029,14 @@ class Model(Base):
         graph: Graph,
         ir_version: Optional[int] = None,
         opset_imports: Optional[List[OperatorSetIdProto]] = None,
+        use_ext_tensors: bool = False,
     ):
         self.graph = graph
         self.ir_version = ir_version
         self.opset_imports = opset_imports
         self._verbose = True
         self._test_shape = {}
+        self.use_ext_tensors = use_ext_tensors
 
     def add_opset(self, domain: str, version: int):
         if self.opset_imports is not None:
@@ -1061,12 +1069,16 @@ class Model(Base):
         self.update_from_onnx(converted_model)
 
     def __copy__(self):
-        obj = Model(self.graph, self.ir_version, self.opset_imports)
+        obj = Model(
+            self.graph, self.ir_version, self.opset_imports, self.use_ext_tensors
+        )
         obj._verbose = self._verbose
         return obj
 
     def __deepcopy__(self, memo):
-        return Model.from_onnx(self.to_onnx_model())
+        return Model.from_onnx(
+            self.to_onnx_model(), use_ext_tensors=self.use_ext_tensors
+        )
 
     def get_schema(self, op_type: str):
         if op_type not in self.schemas:
@@ -1081,6 +1093,7 @@ class Model(Base):
                 self.graph == __o.graph,
                 self.ir_version == __o.ir_version,
                 all([o == i for o, i in zip(self.opset_imports, __o.opset_imports)]),
+                self.ext_tensors == __o.ext_tensors,
             ]
         )
 
@@ -1102,10 +1115,13 @@ class Model(Base):
         )
 
     @classmethod
-    def from_onnx(cls, model: ModelProto):
+    def from_onnx(
+        cls, model: ModelProto, base_path: str = "", use_ext_tensors: bool = False
+    ):
         obj = cls(
-            graph=Graph.from_onnx(model.graph),
+            graph=Graph.from_onnx(model.graph, base_path=base_path),
             ir_version=model.ir_version,
+            use_ext_tensors=use_ext_tensors,
         )
         for opset in model.opset_import:
             obj.add_opset(opset.domain, opset.version)
@@ -1277,23 +1293,31 @@ class Model(Base):
                     return graph
         return None
 
-    def save(self, path: str):
+    def save(self, path: str, ext_tensor_filename: Optional[str] = None):
         try:
-            with open(path, "wb") as f:
-                f.write(self.to_onnx_model().SerializeToString())
+            m = self.to_onnx_model()
+            save_onnx_model(
+                m,
+                path,
+                use_ext_tensors=self.use_ext_tensors,
+                ext_tensor_filename=ext_tensor_filename,
+            )
             onnx.checker.check_model(path, full_check=True)
         except:
             logger.exception("Model is not valid")
             if os.path.isfile(path):
                 os.remove(path)
 
-
     @classmethod
-    def load(cls, path: str):
+    def load(cls, path: str, use_ext_tensors: bool = False):
         model = ModelProto()
         with open(path, "rb") as f:
             model.ParseFromString(f.read())
-        return cls.from_onnx(model)
+        return cls.from_onnx(
+            model,
+            base_path=str(Path(path).parent),
+            use_ext_tensors=use_ext_tensors,
+        )
 
     def add_prefix(self, prefix: str, include_shape=True):
         for g in self.graphs:
@@ -1308,11 +1332,11 @@ class Model(Base):
             g.prune()
 
     @staticmethod
-    def _infer_shapes(model):
+    def _infer_shapes(model, use_ext_tensors):
         model = copy.deepcopy(model)
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "model.onnx")
-            onnx.save(model, path)
+            save_onnx_model(model, path, use_ext_tensors=use_ext_tensors)
             onnx.shape_inference.infer_shapes_path(path, data_prop=True)
             with contextlib.suppress(Exception):
                 onnx.shape_inference.infer_shapes_path(
@@ -1327,7 +1351,7 @@ class Model(Base):
 
     def infer_shapes(self):
         model = self.to_onnx_model()
-        model = self._infer_shapes(model)
+        model = self._infer_shapes(model, self.use_ext_tensors)
         self.update_from_onnx(model)
 
     def opt_by_rt(self, enable_extened=False, enable_all=False, disable_all=False):
@@ -2136,7 +2160,7 @@ class Model(Base):
         with tempfile.TemporaryDirectory() as tmpdir:
             model_path = os.path.join(tmpdir, "model.onnx")
             qmodel_path = os.path.join(tmpdir, "qmodel.onnx")
-            onnx.save(model, model_path)
+            save_onnx_model(model, model_path, use_ext_tensors=self.use_ext_tensors)
 
             quantize_dynamic(
                 model_input=model_path,
@@ -2240,3 +2264,22 @@ class Model(Base):
                     seen.add(t2)
         for t in shared_initializers:
             self.graph.add_tensor(t)
+
+
+def save_onnx_model(
+    model: Model,
+    path: str,
+    use_ext_tensors: bool = False,
+    ext_tensor_filename: Optional[str] = None,
+):
+    if use_ext_tensors:
+        if ext_tensor_filename is not None:
+            ext_tensor_filepath = Path(path).parent / ext_tensor_filename
+            if ext_tensor_filepath.is_file():
+                os.remove(ext_tensor_filepath)
+        convert_model_to_external_data(
+            model,
+            all_tensors_to_one_file=True,
+            location=ext_tensor_filename,
+        )
+    onnx.save_model(model, path)
