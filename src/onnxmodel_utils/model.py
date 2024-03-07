@@ -764,28 +764,68 @@ class Graph(Base):
     def from_onnx(
         cls, graph: GraphProto, is_subgraph: bool = False, base_path: str = ""
     ):
+        total_size = 0
+
+        def update_size(tensor):
+            nonlocal total_size
+            try:
+                if tensor._data is not None:
+                    total_size += tensor._data.size * tensor._data.itemsize
+            except:
+                pass
+
         name_to_tensor = {}
+        print("Inputs:")
         for i in graph.input:
             name_to_tensor[i.name] = Tensor.from_onnx(i, base_path=base_path)
+            print(f"\t{i.name}: {name_to_tensor[i.name].shape},"
+                  f" {name_to_tensor[i.name].dtype}")
+            update_size(name_to_tensor[i.name])
+        print("Outputs:")
         for o in graph.output:
             name_to_tensor[o.name] = Tensor.from_onnx(o, base_path=base_path)
+            print(f"\t{o.name}: {name_to_tensor[o.name].shape},"
+                  f" {name_to_tensor[o.name].dtype}")
+            update_size(name_to_tensor[o.name])
+        print("Initialisers:")
         for i in graph.initializer:
             name_to_tensor[i.name] = Tensor.from_onnx(i, base_path=base_path)
+            print(f"\t{i.name}: {name_to_tensor[i.name].shape},"
+                  f" {name_to_tensor[i.name].dtype}")
+            update_size(name_to_tensor[i.name])
+        print("Value Info:")
         for v in graph.value_info:
             if v.name not in name_to_tensor:
                 name_to_tensor[v.name] = Tensor.from_onnx(v, base_path=base_path)
+                print(f"\t{v.name}: {name_to_tensor[v.name].shape},"
+                      f" {name_to_tensor[v.name].dtype}")
+                update_size(name_to_tensor[v.name])
             else:
                 name_to_tensor[v.name].update(Tensor.from_onnx(v, base_path=base_path))
+                print(f"\t(UPDATED) {v.name}: {name_to_tensor[v.name].shape},"
+                      f" {name_to_tensor[v.name].dtype}")
 
+        print("Nodes:")
         nodes = list()
         for node in graph.node:
             nodes.append(Node.from_onnx(node))
+            print(f"\t{nodes[-1].name}")
+            print("\tInputs:")
             for i in node.input:
+                print(f"\t\t{i}")
                 if i not in name_to_tensor:
+                    print("\t\t\tAdding to name_to_tensor")
                     name_to_tensor[i] = Tensor(name=i)
+                    update_size(name_to_tensor[i])
+            print("\tOuputs:")
             for o in node.output:
+                print(f"\t\t{o}")
                 if o not in name_to_tensor:
+                    print("\t\t\tAdding to name_to_tensor")
                     name_to_tensor[o] = Tensor(name=o)
+                    update_size(name_to_tensor[o])
+
+        print(f"Total size: {total_size}\n-----------------------------\n")
 
         input_names = [i.name for i in graph.input]
         output_names = [o.name for o in graph.output]
@@ -1498,6 +1538,7 @@ class Model(Base):
     def clean(self):
         self.topological_sort()
         self.prune()
+        print("="*40 + "\nClean, Inferring shapes\n" + "="*40)
         self.infer_shapes()
         self.topological_sort()
 

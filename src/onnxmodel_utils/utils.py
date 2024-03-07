@@ -88,9 +88,11 @@ def build_if_model(
         t1.dtype == t2.dtype for t1, t2 in zip(then_graph.outputs, else_graph.outputs)
     )
     attrs = []
+    print("="*40 + "\nCreating then branch 1\n" + "="*40)
     attrs.append(
         Attribute("then_branch", then_graph.to_onnx_graph(), AttributeType.GRAPH)
     )
+    print("="*40 + "\nCreating else branch 1\n" + "="*40)
     attrs.append(
         Attribute("else_branch", else_graph.to_onnx_graph(), AttributeType.GRAPH)
     )
@@ -169,9 +171,11 @@ def build_if_model_with_cache(
         prev_name = cond_tensor.name
 
     attrs = []
+    print("="*40 + "\nCreating then branch 1\n" + "="*40)
     attrs.append(
         Attribute("then_branch", then_graph.to_onnx_graph(), AttributeType.GRAPH)
     )
+    print("="*40 + "\nCreating else branch 1\n" + "="*40)
     attrs.append(
         Attribute("else_branch", else_graph.to_onnx_graph(), AttributeType.GRAPH)
     )
@@ -204,7 +208,9 @@ def build_if_model_with_cache(
 
 
 def _prepare(model1, model2, min_opset=16):
+    print("="*40 + "\nCloning Model 1\n" + "="*40)
     model1 = model1.clone()
+    print("="*40 + "\nCloning Model 1\n" + "="*40)
     model2 = model2.clone()
     opset = max(model1.default_opset, model2.default_opset, min_opset)
     model1.update_default_opset(opset)
