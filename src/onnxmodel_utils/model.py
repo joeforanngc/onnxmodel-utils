@@ -46,6 +46,11 @@ from .transform.decompose_sln import DecomposeSLN
 from .transform.fuse_mulmatmul import FuseMulMatMul
 from .transform.merge_matmul import MergeMatMul
 
+DEBUG=False
+
+def output(s):
+    if DEBUG:
+        print(s)
 
 def value_to_dtype(value: int) -> DType:
     maps = {}
@@ -450,12 +455,18 @@ class Tensor(Base):
 
     def has_same_data(self, other: "Tensor"):
         if self.data is None or other.data is None:
-            return False
+            return False, False
         if self.dtype != other.dtype:
-            return False
+            return False, False
         if self.shape != other.shape:
-            return False
-        return np.array_equal(self.data, other.data)
+            return False, False
+        diff = self.data - other.data
+
+        ret = np.array_equal(self.data, other.data)
+        if not ret:
+            print(f"Shape: {self.shape}, type: {self.dtype}, Mean diff: {diff.mean():.3e},"
+                  f" Abs diff: {np.abs(diff).mean():.3e}, Max diff: {np.abs(diff).max():.3e}")
+        return ret, True
 
 
 class Attribute(Base):
@@ -766,6 +777,7 @@ class Graph(Base):
     ):
         total_size = 0
 
+        debug=False
         def update_size(tensor):
             nonlocal total_size
             try:
@@ -775,57 +787,57 @@ class Graph(Base):
                 pass
 
         name_to_tensor = {}
-        print("Inputs:")
+        output("Inputs:")
         for i in graph.input:
             name_to_tensor[i.name] = Tensor.from_onnx(i, base_path=base_path)
-            print(f"\t{i.name}: {name_to_tensor[i.name].shape},"
+            output(f"\t{i.name}: {name_to_tensor[i.name].shape},"
                   f" {name_to_tensor[i.name].dtype}")
             update_size(name_to_tensor[i.name])
-        print("Outputs:")
+        output("Outputs:")
         for o in graph.output:
             name_to_tensor[o.name] = Tensor.from_onnx(o, base_path=base_path)
-            print(f"\t{o.name}: {name_to_tensor[o.name].shape},"
+            output(f"\t{o.name}: {name_to_tensor[o.name].shape},"
                   f" {name_to_tensor[o.name].dtype}")
             update_size(name_to_tensor[o.name])
-        print("Initialisers:")
+        output("Initialisers:")
         for i in graph.initializer:
             name_to_tensor[i.name] = Tensor.from_onnx(i, base_path=base_path)
-            print(f"\t{i.name}: {name_to_tensor[i.name].shape},"
+            output(f"\t{i.name}: {name_to_tensor[i.name].shape},"
                   f" {name_to_tensor[i.name].dtype}")
             update_size(name_to_tensor[i.name])
-        print("Value Info:")
+        output("Value Info:")
         for v in graph.value_info:
             if v.name not in name_to_tensor:
                 name_to_tensor[v.name] = Tensor.from_onnx(v, base_path=base_path)
-                print(f"\t{v.name}: {name_to_tensor[v.name].shape},"
+                output(f"\t{v.name}: {name_to_tensor[v.name].shape},"
                       f" {name_to_tensor[v.name].dtype}")
                 update_size(name_to_tensor[v.name])
             else:
                 name_to_tensor[v.name].update(Tensor.from_onnx(v, base_path=base_path))
-                print(f"\t(UPDATED) {v.name}: {name_to_tensor[v.name].shape},"
+                output(f"\t(UPDATED) {v.name}: {name_to_tensor[v.name].shape},"
                       f" {name_to_tensor[v.name].dtype}")
 
-        print("Nodes:")
+        output("Nodes:")
         nodes = list()
         for node in graph.node:
             nodes.append(Node.from_onnx(node))
-            print(f"\t{nodes[-1].name}")
-            print("\tInputs:")
+            output(f"\t{nodes[-1].name}")
+            output("\tInputs:")
             for i in node.input:
-                print(f"\t\t{i}")
+                output(f"\t\t{i}")
                 if i not in name_to_tensor:
-                    print("\t\t\tAdding to name_to_tensor")
+                    output("\t\t\tAdding to name_to_tensor")
                     name_to_tensor[i] = Tensor(name=i)
                     update_size(name_to_tensor[i])
-            print("\tOuputs:")
+            output("\tOuputs:")
             for o in node.output:
-                print(f"\t\t{o}")
+                output(f"\t\t{o}")
                 if o not in name_to_tensor:
-                    print("\t\t\tAdding to name_to_tensor")
+                    output("\t\t\tAdding to name_to_tensor")
                     name_to_tensor[o] = Tensor(name=o)
                     update_size(name_to_tensor[o])
 
-        print(f"Total size: {total_size}\n-----------------------------\n")
+        output(f"Total size: {total_size}\n-----------------------------\n")
 
         input_names = [i.name for i in graph.input]
         output_names = [o.name for o in graph.output]
@@ -1051,9 +1063,12 @@ class Graph(Base):
                     continue
                 if j.name in maps:
                     continue
-                if i.has_same_data(j):
+                has_same, did_close_check = i.has_same_data(j)
+                if has_same:
                     maps[j.name] = i.name
                     self.remove_tensor(j.name)
+                elif did_close_check:
+                    print(f"In Remove_duplicated_initializers. {i.name} and {j.name} were judged not close")
         for n in self.nodes:
             for i in n.inputs:
                 if i in maps:
@@ -1538,7 +1553,7 @@ class Model(Base):
     def clean(self):
         self.topological_sort()
         self.prune()
-        print("="*40 + "\nClean, Inferring shapes\n" + "="*40)
+        output("="*40 + "\nClean, Inferring shapes\n" + "="*40)
         self.infer_shapes()
         self.topological_sort()
 
@@ -2269,6 +2284,8 @@ class Model(Base):
     def share_initializers(self):
         all_initializers = []
         initializer_to_graph = {}
+        print(f"In share initializers() {len(self.graphs)} graphs")
+
         for g in self.graphs:
             g.remove_duplicated_initializers()
             for t in g.initializers:
@@ -2288,7 +2305,9 @@ class Model(Base):
                     continue
                 if t1 is t2:
                     continue
-                if t1.has_same_data(t2):
+                t2_name = t2.name.replace("then_", "").replace("else_", "")
+                is_same, did_close_check = t1.has_same_data(t2)
+                if is_same:
                     if t not in shared_initializers:
                         g1 = initializer_to_graph[t1]
                         g1.remove_tensor(t1.name, recursive=True)
@@ -2303,6 +2322,9 @@ class Model(Base):
                     for n2 in g2.nodes:
                         n2.replace_input(t2.name, t.name)
                     seen.add(t2)
+                elif did_close_check:
+                    print(f"{t.name[7:]} and {t2_name} were judged not close")
+
         for t in shared_initializers:
             self.graph.add_tensor(t)
 
