@@ -161,7 +161,7 @@ def build_if_model(
     for i, (name, shape, dtype) in enumerate(initializers):
         print(f"{i:05}\t({mname}) {name}\t{shape}\t{dtype}")
         total_size += get_size(shape, dtype)
-        print(f"Total size: {total_size}\n")
+    print(f"Tensor count: {len(initializers)}, Total size: {total_size}\n")
 
 
     return model
@@ -262,6 +262,18 @@ def build_if_model_with_cache(
         model.add_opset(opset.domain, opset.version)
     if share_initializers:
         model.share_initializers()
+
+    initializers = []
+    for g in model.graphs:
+        for t in g.initializers:
+            initializers.append((t.name, t.shape, t.dtype))
+    initializers = sorted(initializers)
+    total_size = 0
+    for i, (name, shape, dtype) in enumerate(initializers):
+        print(f"{i:05}\t({mname}) {name}\t{shape}\t{dtype}")
+        total_size += get_size(shape, dtype)
+    print(f"Tensor count: {len(initializers)}, Total size: {total_size}\n")
+
     return model
 
 
