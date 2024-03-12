@@ -2379,18 +2379,9 @@ class Model(Base):
                     print(f"In shared_initializers(). {t1.name} and {t2.name} were judged close but not equal")
 
         print(f"Merged count {merged_count}, Size: {merged_size}")
-        names = []
         for t in shared_initializers:
-            names.append((t.name, t.shape, t.dtype))
             self.graph.add_tensor(t)
 
-        names = sorted(names)
-        total_size = 0
-        print("Final initializer name list")
-        for i, (name, shape, dtype) in enumerate(names):
-            print(f"{i:05}\t{name}\t{shape}\t{dtype}")
-            total_size += get_size(shape, dtype)
-        print(f"Total size: {total_size}")
 
 def save_onnx_model(
     model: Model,
