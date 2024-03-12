@@ -1,4 +1,4 @@
-from .model import Attribute, AttributeType, DType, Graph, Model, Node, Tensor
+from .model import Attribute, AttributeType, DType, Graph, Model, Node, Tensor, get_size
 
 
 def build_if_model(
@@ -38,9 +38,11 @@ def build_if_model(
                     initializers.append((t.name, t.shape, t.dtype))
             initializers = sorted(initializers)
 
+            total_size = 0
             for i, (name, shape, dtype) in enumerate(initializers):
                 print(f"{i:05}\t({mname}) {name}\t{shape}\t{dtype}")
-            print("\n")
+                total_size += get_size(shape, dtype)
+            print(f"Total size: {total_size}\n")
         except Exception as e:
             print(f"Error enumerating initializers: {str(e)} ")
 
@@ -188,9 +190,11 @@ def build_if_model_with_cache(
                     initializers.append((t.name, t.shape, t.dtype))
             initializers = sorted(initializers)
 
+            total_size = 0
             for i, (name, shape, dtype) in enumerate(initializers):
                 print(f"{i:05}\t({mname}) {name}\t{shape}\t{dtype}")
-            print("\n")
+                total_size += get_size(shape, dtype)
+            print(f"Total size: {total_size}\n")
         except Exception as e:
             print(f"Error enumerating initializers: {str(e)} ")
 

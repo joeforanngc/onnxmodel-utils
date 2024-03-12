@@ -47,11 +47,30 @@ from .transform.fuse_mulmatmul import FuseMulMatMul
 from .transform.merge_matmul import MergeMatMul
 
 DEBUG=False
-MAX_RTOL=1e-3
+MAX_RTOL=1e-19
 
 def output(s):
     if DEBUG:
         print(s)
+
+def dtype_size(dt):
+    if dt in [DType.INT8, DType.UINT8]:
+        return 1
+    if dt in [DType.INT16, DType.UINT16, DType.FLOAT16]:
+        return 2
+    if dt in [DType.INT32, DType.UINT32, DType.FLOAT]:
+        return 4
+    if dt in [DType.INT64, DType.UINT64, DType.DOUBLE]:
+        return 8
+
+def get_size(shape, dtype):
+    sz = 1
+    for d in shape:
+        if not isinstance(d, int):
+            return 0
+        sz *= d
+    return sz*dtype_size(dtype)
+
 
 def value_to_dtype(value: int) -> DType:
     maps = {}
@@ -1072,6 +1091,8 @@ class Graph(Base):
     def remove_duplicated_initializers(self):
         maps = {}
         initializers = self.initializers
+        total_count = 0
+        total_size = 0
         for i in initializers:
             if i.name in maps:
                 continue
@@ -1082,6 +1103,8 @@ class Graph(Base):
                     continue
                 has_same, pass_close_check = i.has_same_data(j)
                 if has_same:
+                    total_count += 1
+                    total_size += get_size(j.shape, j.dtype)
                     print(f"Removing duplicate of {i.name}:  {j.name} ({i.shape}, {i.dtype})")
                     maps[j.name] = i.name
                     self.remove_tensor(j.name)
@@ -1092,6 +1115,7 @@ class Graph(Base):
                 if i in maps:
                     n.replace_input(i, maps[i])
         self.update()
+        print(f"remove_duplicated_initializers Removed {total_count} size: {total_size}")
 
 
 class Model(Base):
@@ -2316,6 +2340,10 @@ class Model(Base):
         print(f"\n==========================\nExamining all initializers\n==========================\n")
         shared_initializers = []
         seen = set()
+        merged_size = 0
+        merged_count = 0
+
+
         for t1 in all_initializers:
             if t1 in seen:
                 continue
@@ -2330,7 +2358,9 @@ class Model(Base):
                 t2_name = t2.name.replace("then_", "").replace("else_", "")
                 is_same, did_close_check = t1.has_same_data(t2)
                 if is_same:
+                    merged_count += 1
                     print(f"In shared_initializers(). {t1.name} and {t2.name} were the same. Shape: {t1.shape}")
+                    merged_size += get_size(t1.shape, t1.dtype)
                     if t not in shared_initializers:
                         g1 = initializer_to_graph[t1]
                         g1.remove_tensor(t1.name, recursive=True)
@@ -2348,15 +2378,19 @@ class Model(Base):
                 elif did_close_check:
                     print(f"In shared_initializers(). {t1.name} and {t2.name} were judged close but not equal")
 
+        print(f"Merged count {merged_count}, Size: {merged_size}")
         names = []
         for t in shared_initializers:
             names.append((t.name, t.shape, t.dtype))
             self.graph.add_tensor(t)
 
         names = sorted(names)
+        total_size = 0
         print("Final initializer name list")
         for i, (name, shape, dtype) in enumerate(names):
             print(f"{i:05}\t{name}\t{shape}\t{dtype}")
+            total_size += get_size(shape, dtype)
+        print(f"Total size: {total_size}")
 
 def save_onnx_model(
     model: Model,
