@@ -19,6 +19,31 @@ def build_if_model(
     union_output_names = list(set(then_outputs) | set(else_outputs))
     common_output_names = list(set(then_outputs) & set(else_outputs))
     name_to_output_tensor = {}
+
+    def print_names(l, title):
+        print(f"In build_if_model: {title}")
+        for name in l:
+            print(f"  {name}")
+
+    print_names(common_input_names, "Common Inputs")
+    print_names(union_input_names, "Union Inputs")
+    print_names(common_output_names, "Common Outputs")
+    print_names(common_output_names, "Union Outputs")
+
+    for mname, model in zip(["then", "else"], [then_model, else_model]):
+        initializers = []
+        try:
+            for g in model.graphs:
+                for t in g.initializers:
+                    initializers.append((t.name, t.shape, t.dtype))
+            initializers = sorted(initializers)
+
+            for i, (name, shape, dtype) in enumerate(initializers):
+                print(f"{i:05}\t({mname}) {name}\t{shape}\t{dtype}")
+            print("\n")
+        except Exception as e:
+            print(f"Error enumerating initializers: {str(e)} ")
+
     for o in union_output_names:
         if o in then_outputs:
             name_to_output_tensor[o] = then_model.graph.name_to_tensor[o].clone()
@@ -106,6 +131,8 @@ def build_if_model(
     nodes.append(node)
     tensor_list.append(cond_tensor)
 
+    print(f"Creating graph {name}, {len(nodes)} nodes, {len(union_input_names)} inputs, "
+          f"{len(node.outputs)} outputs, {len(tensor_list)} tensors.")
     graph = Graph(
         name,
         nodes,
@@ -152,6 +179,20 @@ def build_if_model_with_cache(
     assert all(
         t1.dtype == t2.dtype for t1, t2 in zip(then_graph.outputs, else_graph.outputs)
     )
+
+    for mname, model in zip(["cached", "cacheless"], [cache_model, cacheless_model]):
+        initializers = []
+        try:
+            for g in model.graphs:
+                for t in g.initializers:
+                    initializers.append((t.name, t.shape, t.dtype))
+            initializers = sorted(initializers)
+
+            for i, (name, shape, dtype) in enumerate(initializers):
+                print(f"{i:05}\t({mname}) {name}\t{shape}\t{dtype}")
+            print("\n")
+        except Exception as e:
+            print(f"Error enumerating initializers: {str(e)} ")
 
     nodes, tensor_list = _match_inputs(
         then_graph, else_graph, common_input_names, union_input_names, then_inputs, True
@@ -208,9 +249,7 @@ def build_if_model_with_cache(
 
 
 def _prepare(model1, model2, min_opset=16):
-    print("="*40 + "\nCloning Model 1\n" + "="*40)
     model1 = model1.clone()
-    print("="*40 + "\nCloning Model 1\n" + "="*40)
     model2 = model2.clone()
     opset = max(model1.default_opset, model2.default_opset, min_opset)
     model1.update_default_opset(opset)
@@ -226,6 +265,7 @@ def _match_inputs(
     then_inputs,
     make_is_opt_node=False,
 ):
+    print("Matching Inputs")
     for i in common_input_names:
         t1 = then_graph.name_to_tensor[i]
         t2 = else_graph.name_to_tensor[i]
@@ -234,6 +274,12 @@ def _match_inputs(
                 f"Input {i} has different shape or dtype between then and else branches"
             )
         elif t1.is_optional != t2.is_optional:
+            print(f"  Optionality of {i} differs")
+            if t1.is_optional:
+                print("    Then graph was optional")
+            else:
+                print("    Else graph was optional")
+
             g = else_graph if t1.is_optional else then_graph
             t = (t2 if t1.is_optional else t1).clone()
             opt_t = t.clone()
@@ -251,6 +297,7 @@ def _match_inputs(
     for t1, t2 in zip(then_graph.outputs, else_graph.outputs):
         t = t1.clone()
         if t1.shape != t2.shape:
+            print(f" Shapes of outputs {t1.name}({t1.shape}) and {t2.name}({t2.shape}) differ")
             if len(t1.shape) != len(t2.shape):
                 t.clear_shape()
             else:
@@ -259,6 +306,7 @@ def _match_inputs(
                     if t1.shape[i] != t2.shape[i]:
                         shape[i] = f"{t1.shape[1]}_{t2.shape[1]}"
                 t.shape = shape
+            print(f"    Set shape to {t.shape}")
         t.name = t.name[5:]
         tensor_list.append(t)
 

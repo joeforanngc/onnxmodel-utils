@@ -47,6 +47,7 @@ from .transform.fuse_mulmatmul import FuseMulMatMul
 from .transform.merge_matmul import MergeMatMul
 
 DEBUG=False
+MAX_RTOL=1e-3
 
 def output(s):
     if DEBUG:
@@ -463,10 +464,26 @@ class Tensor(Base):
         diff = self.data - other.data
 
         ret = np.array_equal(self.data, other.data)
-        if not ret:
-            print(f"Shape: {self.shape}, type: {self.dtype}, Mean diff: {diff.mean():.3e},"
-                  f" Abs diff: {np.abs(diff).mean():.3e}, Max diff: {np.abs(diff).max():.3e}")
-        return ret, True
+        #ret = np.allclose(self.data, other.data, rtol=1e-4)
+        if ret:
+            return True, False
+        if not ret and self.dtype in [DType.FLOAT16, DType.FLOAT, DType.DOUBLE]:
+            d = np.abs(self.data - other.data)
+            av = 0.5 * (self.data + other.data)
+            eps = 1e-12
+            adj_av = np.abs(np.where(av == 0.0, eps, av))
+            atol = 1e-8
+            rtol = (np.abs(d - atol) / adj_av).max()
+            m = self.data.mean()
+            am = np.abs(self.data).mean()
+            std = self.data.std()
+
+            if rtol < MAX_RTOL:
+                print(f"Shape: {self.shape}, type: {self.dtype}, Mean Abs diff: {d.mean():.2e}, "
+                      f"Rtol: {rtol:.2e}, "
+                      f"Mean: {m:.2e}, mean abs: {am:.3e}, std dev: {std:.3e}")
+                return False, True
+        return False, False
 
 
 class Attribute(Base):
@@ -1063,12 +1080,13 @@ class Graph(Base):
                     continue
                 if j.name in maps:
                     continue
-                has_same, did_close_check = i.has_same_data(j)
+                has_same, pass_close_check = i.has_same_data(j)
                 if has_same:
+                    print(f"Removing duplicate of {i.name}:  {j.name} ({i.shape}, {i.dtype})")
                     maps[j.name] = i.name
                     self.remove_tensor(j.name)
-                elif did_close_check:
-                    print(f"In Remove_duplicated_initializers. {i.name} and {j.name} were judged not close")
+                elif pass_close_check:
+                    print(f"In Remove_duplicated_initializers. {i.name} and {j.name} were judged close but not equal")
         for n in self.nodes:
             for i in n.inputs:
                 if i in maps:
@@ -2284,14 +2302,18 @@ class Model(Base):
     def share_initializers(self):
         all_initializers = []
         initializer_to_graph = {}
-        print(f"In share initializers() {len(self.graphs)} graphs")
+        print(f"In share initializers()")
 
-        for g in self.graphs:
+        for gn, g in enumerate(self.graphs):
+            print(f"\n--------------------------Graph {gn} ({g.name})\n--------------------------")
             g.remove_duplicated_initializers()
             for t in g.initializers:
                 all_initializers.append(t)
                 initializer_to_graph[t] = g
 
+        print(f"Total of {len(initializer_to_graph)} initializers")
+
+        print(f"\n==========================\nExamining all initializers\n==========================\n")
         shared_initializers = []
         seen = set()
         for t1 in all_initializers:
@@ -2308,6 +2330,7 @@ class Model(Base):
                 t2_name = t2.name.replace("then_", "").replace("else_", "")
                 is_same, did_close_check = t1.has_same_data(t2)
                 if is_same:
+                    print(f"In shared_initializers(). {t1.name} and {t2.name} were the same. Shape: {t1.shape}")
                     if t not in shared_initializers:
                         g1 = initializer_to_graph[t1]
                         g1.remove_tensor(t1.name, recursive=True)
@@ -2323,11 +2346,17 @@ class Model(Base):
                         n2.replace_input(t2.name, t.name)
                     seen.add(t2)
                 elif did_close_check:
-                    print(f"{t.name[7:]} and {t2_name} were judged not close")
+                    print(f"In shared_initializers(). {t1.name} and {t2.name} were judged close but not equal")
 
+        names = []
         for t in shared_initializers:
+            names.append((t.name, t.shape, t.dtype))
             self.graph.add_tensor(t)
 
+        names = sorted(names)
+        print("Final initializer name list")
+        for i, (name, shape, dtype) in enumerate(names):
+            print(f"{i:05}\t{name}\t{shape}\t{dtype}")
 
 def save_onnx_model(
     model: Model,
