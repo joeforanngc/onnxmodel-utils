@@ -506,9 +506,9 @@ class Tensor(Base):
 
 
 class Attribute(Base):
-    def __init__(self, name: str, value: Any, attr_type: AttributeType = None):
+    def __init__(self, name: str, value: Any, attr_type: AttributeType = None, base_path: str = ""):
         self.name = name
-        self.value = self.unpack(value, attr_type)
+        self.value = self.unpack(value, attr_type, base_path)
         self.attr_type = attr_type
 
     def __copy__(self):
@@ -521,11 +521,11 @@ class Attribute(Base):
         return obj
 
     @classmethod
-    def from_onnx(cls, attr: AttributeProto) -> "Attribute":
+    def from_onnx(cls, attr: AttributeProto, base_path: str = "") -> "Attribute":
         name = attr.name
         value = helper.get_attribute_value(attr)
         attr_type = attr.type
-        return cls(name, value, attr_type)
+        return cls(name, value, attr_type, base_path)
 
     def to_onnx(self) -> AttributeProto:
         value = self.pack(self.value, self.attr_type)
@@ -547,15 +547,15 @@ class Attribute(Base):
         strings = self.to_onnx().SerializeToString()
         return hash(strings)
 
-    def unpack(self, value, attr_type) -> Any:
+    def unpack(self, value, attr_type, base_path: str = "") -> Any:
         if attr_type == AttributeType.GRAPH:
-            return Graph.from_onnx(value, is_subgraph=True)
+            return Graph.from_onnx(value, is_subgraph=True, base_path=base_path)
         elif attr_type == AttributeType.GRAPHS:
-            return [Graph.from_onnx(g, is_subgraph=True) for g in value]
+            return [Graph.from_onnx(g, is_subgraph=True, base_path=base_path) for g in value]
         elif attr_type == AttributeType.TENSOR:
-            return Tensor.from_onnx(value)
+            return Tensor.from_onnx(value, base_path=base_path)
         elif attr_type == AttributeType.TENSORS:
-            return [Tensor.from_onnx(t) for t in value]
+            return [Tensor.from_onnx(t, base_path=base_path) for t in value]
         else:
             return value
 
@@ -632,10 +632,10 @@ class Node(Base):
         return node
 
     @classmethod
-    def from_onnx(cls, node: NodeProto):
+    def from_onnx(cls, node: NodeProto, base_path: str = ""):
         attrs = []
         for attr in node.attribute:
-            attrs.append(Attribute.from_onnx(attr))
+            attrs.append(Attribute.from_onnx(attr, base_path=base_path))
         inputs = []
         for i in node.input:
             inputs.append(i)
@@ -856,7 +856,7 @@ class Graph(Base):
         output("Nodes:")
         nodes = list()
         for node in graph.node:
-            nodes.append(Node.from_onnx(node))
+            nodes.append(Node.from_onnx(node, base_path=base_path))
             output(f"\t{nodes[-1].name}")
             output("\tInputs:")
             for i in node.input:
