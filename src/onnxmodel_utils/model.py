@@ -46,6 +46,11 @@ from .transform.decompose_sln import DecomposeSLN
 from .transform.fuse_mulmatmul import FuseMulMatMul
 from .transform.merge_matmul import MergeMatMul
 
+# DEBUG CODE
+import re
+
+DRD_REGEX = re.compile(r"^.*block\.(\d+).*DenseReluDense.*block\.(\d+).*DenseReluDense.*$")
+
 DEBUG=False
 MAX_RTOL=1e-19
 
@@ -70,6 +75,8 @@ def get_size(shape, dtype):
             return 0
         sz *= d
     return sz*dtype_size(dtype)
+
+# --- END DEBUG CODE ---
 
 
 def value_to_dtype(value: int) -> DType:
@@ -480,7 +487,6 @@ class Tensor(Base):
             return False, False
         if self.shape != other.shape:
             return False, False
-        diff = self.data - other.data
 
         ret = np.array_equal(self.data, other.data)
         #ret = np.allclose(self.data, other.data, rtol=1e-4)
@@ -2343,6 +2349,7 @@ class Model(Base):
         merged_size = 0
         merged_count = 0
 
+        all_initializers = sorted(all_initializers, key=lambda t: t.name)
 
         for t1 in all_initializers:
             if t1 in seen:
@@ -2377,6 +2384,26 @@ class Model(Base):
                     seen.add(t2)
                 elif did_close_check:
                     print(f"In shared_initializers(). {t1.name} and {t2.name} were judged close but not equal")
+                elif t1.shape == t2.shape and t1.dtype == t2.dtype:
+                    drd_match_res1 = DRD_REGEX.match(t1.name)
+                    drd_match_res2 = DRD_REGEX.match(t2_name)
+                    if (drd_match_res1 is not None) and (drd_match_res2 is not None) and drd_match_res1.group(1) == drd_match_res2.group(1):
+                        assert drd_match_res1.group(2) == drd_match_res2.group(2)
+                        assert drd_match_res1.group(1) == drd_match_res2.group(2)
+                        d = np.abs(t1.data - t2.data).mean()
+                        av = 0.5 * (t1.data + t2.data)
+                        eps = 1e-12
+                        adj_av = np.abs(np.where(av == 0.0, eps, av))
+                        atol = 1e-8
+                        rtol = (np.abs(d - atol) / adj_av).max()
+                        m = t1.data.mean()
+                        am = np.abs(t1.data).mean()
+                        std = t1.data.std()
+                        print(f"DRD Check.\n   {t1.name}\n  {t2.name}\n  Shape: {t1.shape}, type: {t1.dtype}, Mean Abs diff: {d.mean():.2e}, "
+                              f"Rtol: {rtol:.2e}, "
+                              f"Mean: {m:.2e}, mean abs: {am:.3e}, std dev: {std:.3e}")
+
+
 
         print(f"Merged count {merged_count}, Size: {merged_size}")
         for t in shared_initializers:
