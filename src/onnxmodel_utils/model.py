@@ -459,9 +459,9 @@ class Tensor(Base):
 
 
 class Attribute(Base):
-    def __init__(self, name: str, value: Any, attr_type: AttributeType = None):
+    def __init__(self, name: str, value: Any, attr_type: AttributeType = None, base_path: str = ""):
         self.name = name
-        self.value = self.unpack(value, attr_type)
+        self.value = self.unpack(value, attr_type, base_path)
         self.attr_type = attr_type
 
     def __copy__(self):
