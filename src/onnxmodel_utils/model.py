@@ -1487,7 +1487,7 @@ class Model(Base):
         trns(self)
 
     def simplify(self):
-#        self.matmul_opt()
+        self.matmul_opt()
         self.clean()
         model = self.to_onnx_model()
         model, check = simplify(model)

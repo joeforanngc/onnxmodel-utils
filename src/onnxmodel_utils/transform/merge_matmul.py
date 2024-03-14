@@ -64,7 +64,7 @@ class MergeMatMul(TransformBase):
 
         # merge bros' weights
         name = weight_name
-        weights = [weight_tensor.data.copy()]
+        weights = [(name, weight_tensor.data.copy())]
         original_outputs = [output_name]
         for bro in bros:
             w = name_to_tensor[bro.inputs[1]]
@@ -72,18 +72,21 @@ class MergeMatMul(TransformBase):
                 continue
             if w.name == weight_name:
                 continue
-            if w.data.shape[0] != weights[-1].shape[0]:
+            if w.data.shape[0] != weights[-1][1].shape[0]:
                 continue
-            if w.shape[1] != weights[-1].shape[1]:
+            if w.shape[1] != weights[-1][1].shape[1]:
                 continue
-            weights.append(w.data.copy())
-            name += "_" + w.name
+            weights.append((w.name, w.data.copy()))
             original_outputs.append(bro.outputs[0])
         if len(weights) <= 1:
             return
 
         del w
-        weights = np.concatenate(weights, axis=1).copy()
+
+        weights = sorted(weights, key=lambda w: w[0])
+        name = '_'.join([w[0] for w in weights])
+        weights = np.concatenate([w[1] for w in weights], axis=1).copy()
+
         assert input_tensor.shape[-1] == weights.shape[0]
 
         # make merged matmul node
