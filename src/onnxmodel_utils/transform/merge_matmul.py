@@ -64,8 +64,7 @@ class MergeMatMul(TransformBase):
 
         # merge bros' weights
         name = weight_name
-        weights = [(name, weight_tensor.data.copy())]
-        original_outputs = [output_name]
+        weights = [(name, weight_tensor.data.copy(), output_name)]
         for bro in bros:
             w = name_to_tensor[bro.inputs[1]]
             if len(w.data.shape) != 2:
@@ -76,8 +75,7 @@ class MergeMatMul(TransformBase):
                 continue
             if w.shape[1] != weights[-1][1].shape[1]:
                 continue
-            weights.append((w.name, w.data.copy()))
-            original_outputs.append(bro.outputs[0])
+            weights.append((w.name, w.data.copy(), bro.outputs[0]))
         if len(weights) <= 1:
             return
 
@@ -86,6 +84,7 @@ class MergeMatMul(TransformBase):
         weights = sorted(weights, key=lambda w: w[0])
         name = '_'.join([w[0] for w in weights])
         weights = np.concatenate([w[1] for w in weights], axis=1).copy()
+        original_outputs = [w[2] for w in weights]
 
         assert input_tensor.shape[-1] == weights.shape[0]
 
